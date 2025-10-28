@@ -1,5 +1,6 @@
 import { Action, ActionPanel, Form, LaunchProps, open, Icon, popToRoot } from "@raycast/api";
 import { useForm } from "@raycast/utils";
+import { useRef, useEffect } from "react";
 import { languages } from "./languages";
 
 type FormValues = {
@@ -11,6 +12,8 @@ type FormValues = {
   language: string;
   /** the file extensions to search for */
   extensions?: string;
+  /** the file names to search for */
+  filenames?: string;
   /** the organization to search within */
   org?: string;
 };
@@ -18,16 +21,19 @@ type FormValues = {
 export default function Command(
   props: LaunchProps<{ draftValues: FormValues; arguments: Arguments.GithubCodeSearch }>,
 ) {
+  const hasExecutedFromArgsRef = useRef(false);
+
   const { handleSubmit, itemProps, values } = useForm<FormValues>({
     async onSubmit(values) {
       await open(`https://github.com/search?${buildQueryParams(values)}`);
       popToRoot();
     },
     initialValues: {
-      query: props.draftValues?.query ?? props.fallbackText ?? "",
+      query: props.draftValues?.query ?? props.fallbackText ?? props.arguments.query ?? "",
       isSymbol: props.draftValues?.isSymbol ?? false,
-      language: props.draftValues?.language ?? "",
+      language: props.draftValues?.language ?? props.arguments.language ?? "",
       extensions: props.draftValues?.extensions ?? "",
+      filenames: props.draftValues?.filenames ?? "",
       org: props.draftValues?.org ?? "",
     },
     validation: {
@@ -35,12 +41,18 @@ export default function Command(
     },
   });
 
+  useEffect(() => {
+    if (props.arguments.query && !hasExecutedFromArgsRef.current) {
+      hasExecutedFromArgsRef.current = true;
+      handleSubmit({
+        query: props.arguments.query,
+        language: props.arguments.language ?? "",
+        isSymbol: false,
+      });
+    }
+  }, [handleSubmit, props.arguments.query, props.arguments.language]);
+
   if (props.arguments.query) {
-    handleSubmit({
-      query: props.arguments.query,
-      language: props.arguments.language,
-      isSymbol: false,
-    });
     return null;
   }
 
@@ -64,6 +76,14 @@ export default function Command(
       <Form.TextField title="Query" placeholder="Search..." {...itemProps.query} />
       <Form.Separator />
       <Form.Description text="Search Options" />
+      <Form.Dropdown title="Written in this language" {...itemProps.language}>
+        {languages.map(({ name, value }, index) => (
+          <Form.Dropdown.Item value={value} title={name} key={index} />
+        ))}
+      </Form.Dropdown>
+      <Form.TextField title="With this extension" placeholder="rb, py, jpg" {...itemProps.extensions} />
+      <Form.TextField title="With this filename" placeholder="app.rb, footer.erb" {...itemProps.filenames} />
+      <Form.TextField title="Organization" placeholder="github" {...itemProps.org} />
       <Form.Checkbox
         label="Symbol"
         title="Search for symbols"
@@ -74,18 +94,11 @@ export default function Command(
         // https://github.com/raycast/utils/issues/19
         value={undefined}
       />
-      <Form.Dropdown title="Written in this language" {...itemProps.language}>
-        {languages.map(({ name, value }, index) => (
-          <Form.Dropdown.Item value={value} title={name} key={index} />
-        ))}
-      </Form.Dropdown>
-      <Form.TextField title="With this extension" placeholder="rb, py, jpg" {...itemProps.extensions} />
-      <Form.TextField title="Organization" placeholder="github" {...itemProps.org} />
     </Form>
   );
 }
 
-const buildQueryParams = ({ query, isSymbol, language, extensions, org }: FormValues) => {
+const buildQueryParams = ({ query, isSymbol, language, extensions, filenames, org }: FormValues) => {
   const queries = [isSymbol ? `symbol:${query}` : query];
 
   if (language) {
@@ -101,6 +114,18 @@ const buildQueryParams = ({ query, isSymbol, language, extensions, org }: FormVa
       `(${extensions
         .split(",")
         .map((ext) => `path:*.${ext.trim()}`)
+        .join(" OR ")})`,
+    );
+  }
+
+  if (filenames) {
+    // if the user has entered a comma separated list of filenames,
+    // we need to wrap each one in a path:**/filename, and then join them with an OR.
+    // e.g. (path:**/hoge.rb OR path:**/huga.rb)
+    queries.push(
+      `(${filenames
+        .split(",")
+        .map((filename) => `path:**/${filename.trim()}`)
         .join(" OR ")})`,
     );
   }
